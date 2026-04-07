@@ -224,7 +224,7 @@ fn tc19_comment_above_stays() {
 #[test]
 fn edge_empty_file() {
     let result = sort_source("").expect("should not error");
-    assert_eq!(result, "\n");
+    assert_eq!(result, "");
 }
 
 // --- Additional edge case: file with no imports ---

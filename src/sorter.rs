@@ -221,6 +221,11 @@ pub fn sort_and_reconstruct(
         }
     }
 
+    // Empty file — return as-is without adding a trailing newline.
+    if result_lines.is_empty() {
+        return Ok(String::new());
+    }
+
     let mut output = result_lines.join("\n");
     // Ensure file ends with a newline.
     if !output.ends_with('\n') {
