@@ -1,0 +1,11 @@
+- id: lort
+  name: lort import sorter (check)
+  entry: lort --check
+  language: rust
+  types: [python]
+
+- id: lort-fix
+  name: lort import sorter (fix)
+  entry: lort
+  language: rust
+  types: [python]
