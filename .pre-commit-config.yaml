@@ -1,0 +1,20 @@
+# See https://pre-commit.com/ for usage and config
+exclude: '(\.wasm)|(Cargo\.lock)'
+default_stages: [pre-commit]
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.2.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        args: [--all, --]
+      - id: cargo-check
+        args: [--all-targets, --all-features]
+      - id: clippy
+        args: [--all-targets, --all-features, --, -D, warnings]
