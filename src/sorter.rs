@@ -299,6 +299,7 @@ mod tests {
             line_number: 1,
             is_relative: false,
             is_future: false,
+            is_multiline: false,
         };
         sort_imported_names(&mut stmt);
         let names: Vec<&str> = stmt.names.iter().map(|n| n.name.as_str()).collect();
@@ -319,6 +320,7 @@ mod tests {
                 line_number: 1,
                 is_relative: false,
                 is_future: false,
+                is_multiline: false,
             },
             ImportStatement {
                 kind: ImportKind::Import,
@@ -328,6 +330,7 @@ mod tests {
                 line_number: 2,
                 is_relative: false,
                 is_future: false,
+                is_multiline: false,
             },
         ];
         sort_import_block(&mut block);
@@ -349,6 +352,7 @@ mod tests {
                 line_number: 1,
                 is_relative: false,
                 is_future: false,
+                is_multiline: false,
             },
             ImportStatement {
                 kind: ImportKind::Import,
@@ -358,6 +362,7 @@ mod tests {
                 line_number: 2,
                 is_relative: false,
                 is_future: false,
+                is_multiline: false,
             },
             ImportStatement {
                 kind: ImportKind::FromImport,
@@ -370,6 +375,7 @@ mod tests {
                 line_number: 3,
                 is_relative: false,
                 is_future: false,
+                is_multiline: false,
             },
         ];
         sort_import_block(&mut block);
@@ -392,6 +398,7 @@ mod tests {
                 line_number: 1,
                 is_relative: false,
                 is_future: true,
+                is_multiline: false,
             },
             ImportStatement {
                 kind: ImportKind::Import,
@@ -401,6 +408,7 @@ mod tests {
                 line_number: 2,
                 is_relative: false,
                 is_future: false,
+                is_multiline: false,
             },
         ];
         let result = validate_future_imports(&block, Path::new("test.py"));

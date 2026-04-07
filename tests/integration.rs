@@ -243,3 +243,37 @@ fn edge_single_line_parenthesized() {
         "from typing import Any, Dict, Optional\n",
     );
 }
+
+// --- Multi-line parenthesized imports preserve format ---
+
+#[test]
+fn edge_multiline_parenthesized_preserved() {
+    assert_sorts_to(
+        "from sync_tools.sync import (\n\
+         \x20   execute_sync_plan,\n\
+         \x20   build_copy_plan,\n\
+         \x20   display_sync_plan,\n\
+         )\n",
+        "from sync_tools.sync import (\n\
+         \x20   build_copy_plan,\n\
+         \x20   display_sync_plan,\n\
+         \x20   execute_sync_plan,\n\
+         )\n",
+    );
+}
+
+#[test]
+fn edge_multiline_mixed_with_single_line() {
+    assert_sorts_to(
+        "from sync_tools.sync import (\n\
+         \x20   execute_sync_plan,\n\
+         \x20   build_copy_plan,\n\
+         )\n\
+         from sync_tools.models import SyncMode, SyncOperation\n",
+        "from sync_tools.sync import (\n\
+         \x20   build_copy_plan,\n\
+         \x20   execute_sync_plan,\n\
+         )\n\
+         from sync_tools.models import SyncMode, SyncOperation\n",
+    );
+}

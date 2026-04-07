@@ -36,6 +36,8 @@ pub struct ImportStatement {
     pub is_relative: bool,
     /// Whether this is a `__future__` import.
     pub is_future: bool,
+    /// Whether the original used multi-line parenthesized form.
+    pub is_multiline: bool,
 }
 
 /// A segment of a Python source file: either an import statement
@@ -161,6 +163,7 @@ fn parse_import_statement(
         line_number,
         is_relative: false, // plain `import` can't be relative
         is_future: module_path == "__future__",
+        is_multiline: false,
     })
 }
 
@@ -265,6 +268,7 @@ fn parse_from_import(
                     line_number,
                     is_relative,
                     is_future,
+                    is_multiline: true,
                 },
                 j - start,
             ));
@@ -280,6 +284,7 @@ fn parse_from_import(
                 line_number,
                 is_relative,
                 is_future,
+                is_multiline: false,
             },
             1,
         ));
@@ -298,6 +303,7 @@ fn parse_from_import(
             line_number,
             is_relative,
             is_future,
+            is_multiline: false,
         },
         1,
     ))
@@ -355,8 +361,8 @@ fn extract_comment(s: &str) -> Option<&str> {
 
 /// Reconstruct an [`ImportStatement`] back into source code.
 ///
-/// Outputs a single-line format. Run `ruff format` afterwards
-/// if line-length wrapping is needed.
+/// Preserves multi-line parenthesized format when the original used it.
+/// Single-line imports remain single-line.
 ///
 /// # Arguments
 ///
@@ -364,7 +370,7 @@ fn extract_comment(s: &str) -> Option<&str> {
 ///
 /// # Returns
 ///
-/// A single line of Python source code.
+/// One or more lines of Python source code (without trailing newline).
 pub fn reconstruct_import(stmt: &ImportStatement) -> String {
     let mut out = String::with_capacity(80);
 
@@ -378,6 +384,7 @@ pub fn reconstruct_import(stmt: &ImportStatement) -> String {
             out.push_str(&stmt.module_path);
             out.push_str(" import ");
 
+            // Format each name, handling optional aliases.
             let names: Vec<String> = stmt
                 .names
                 .iter()
@@ -386,7 +393,20 @@ pub fn reconstruct_import(stmt: &ImportStatement) -> String {
                     None => n.name.clone(),
                 })
                 .collect();
-            out.push_str(&names.join(", "));
+
+            if stmt.is_multiline {
+                // Reconstruct parenthesized multi-line form with
+                // 4-space indentation per PEP 8 / black / ruff defaults.
+                out.push('(');
+                for name in &names {
+                    out.push_str("\n    ");
+                    out.push_str(name);
+                    out.push(',');
+                }
+                out.push_str("\n)");
+            } else {
+                out.push_str(&names.join(", "));
+            }
         }
     }
 
@@ -547,6 +567,7 @@ mod tests {
             line_number: 1,
             is_relative: false,
             is_future: false,
+            is_multiline: false,
         };
         assert_eq!(reconstruct_import(&stmt), "import os");
     }
@@ -570,10 +591,63 @@ mod tests {
             line_number: 1,
             is_relative: false,
             is_future: false,
+            is_multiline: false,
         };
         assert_eq!(
             reconstruct_import(&stmt),
             "from os.path import join as j, exists  # utils"
         );
+    }
+
+    #[test]
+    fn test_reconstruct_multiline_import() {
+        let stmt = ImportStatement {
+            kind: ImportKind::FromImport,
+            module_path: "sync_tools.sync".to_string(),
+            names: vec![
+                ImportedName {
+                    name: "build_copy_plan".to_string(),
+                    alias: None,
+                },
+                ImportedName {
+                    name: "display_sync_plan".to_string(),
+                    alias: None,
+                },
+                ImportedName {
+                    name: "execute_sync_plan".to_string(),
+                    alias: None,
+                },
+            ],
+            inline_comment: None,
+            line_number: 1,
+            is_relative: false,
+            is_future: false,
+            is_multiline: true,
+        };
+        assert_eq!(
+            reconstruct_import(&stmt),
+            "from sync_tools.sync import (\n\
+             \x20   build_copy_plan,\n\
+             \x20   display_sync_plan,\n\
+             \x20   execute_sync_plan,\n\
+             )"
+        );
+    }
+
+    #[test]
+    fn test_roundtrip_multiline_parenthesized() {
+        let source = "from typing import (\n    Any,\n    Dict,\n    List,\n)\n";
+        let segments = parse_file(source, &test_path()).unwrap();
+        match &segments[0] {
+            FileSegment::Import(stmt) => {
+                assert!(stmt.is_multiline);
+                let reconstructed = reconstruct_import(stmt);
+                assert_eq!(
+                    reconstructed,
+                    "from typing import (\n    Any,\n    Dict,\n    List,\n)"
+                );
+            }
+            _ => panic!("expected Import segment"),
+        }
     }
 }
