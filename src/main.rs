@@ -1,10 +1,12 @@
-use std::io::{self, Read as _};
+use std::io::{self, IsTerminal as _, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use similar::TextDiff;
+use owo_colors::OwoColorize;
+use similar::{ChangeTag, TextDiff};
+use tracing::{error, info, warn};
 use walkdir::WalkDir;
 
 use lort::error::LortError;
@@ -53,6 +55,29 @@ struct Cli {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    // Initialize tracing subscriber.
+    // Default level is WARN; --verbose promotes to INFO; --quiet suppresses to ERROR.
+    // Users can override via the RUST_LOG environment variable.
+    let default_level = if cli.verbose {
+        "info"
+    } else if cli.quiet {
+        "error"
+    } else {
+        "warn"
+    };
+
+    // NOTE for Rust newcomers: `tracing-subscriber` decouples log output
+    // format from the log call sites. EnvFilter lets users override the
+    // level at runtime via RUST_LOG=debug, for example.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level)),
+        )
+        .without_time()
+        .with_target(false)
+        .init();
+
     match run(&cli) {
         Ok(has_unsorted) => {
             if has_unsorted && (cli.check || cli.diff) {
@@ -64,19 +89,13 @@ fn main() -> ExitCode {
         Err(e) => {
             // Check if the underlying error is a LortError (exit code 2).
             if let Some(lort_err) = e.downcast_ref::<LortError>() {
-                tracing_style_error(lort_err);
+                error!("{lort_err}");
             } else {
-                tracing_style_error(&e);
+                error!("{e}");
             }
             ExitCode::from(2)
         }
     }
-}
-
-/// Print an error in a style resembling `tracing::error!` output,
-/// without pulling in the full tracing dependency.
-fn tracing_style_error(err: &dyn std::fmt::Display) {
-    eprintln!("error: {err}");
 }
 
 /// Main logic: process files and return whether any were unsorted.
@@ -91,13 +110,23 @@ fn run(cli: &Cli) -> Result<bool> {
     let files = collect_python_files(&cli.paths, &cli.exclude)?;
 
     if files.is_empty() && cli.verbose {
-        eprintln!("No Python files found.");
+        warn!("No Python files found.");
     }
+
+    // Enable ANSI colors when stdout is a terminal.
+    let use_color = io::stdout().is_terminal();
 
     let mut any_unsorted = false;
 
     for file_path in &files {
-        let changed = process_file(file_path, check_mode, cli.diff, cli.quiet, cli.verbose)?;
+        let changed = process_file(
+            file_path,
+            check_mode,
+            cli.diff,
+            cli.quiet,
+            cli.verbose,
+            use_color,
+        )?;
         if changed {
             any_unsorted = true;
         }
@@ -115,6 +144,7 @@ fn process_file(
     show_diff: bool,
     quiet: bool,
     verbose: bool,
+    use_color: bool,
 ) -> Result<bool> {
     let source = std::fs::read_to_string(file_path).map_err(|e| LortError::Io {
         path: file_path.to_path_buf(),
@@ -126,7 +156,7 @@ fn process_file(
 
     if source == sorted {
         if verbose {
-            eprintln!("{}: already sorted", file_path.display());
+            info!(file = %file_path.display(), "already sorted");
         }
         return Ok(false);
     }
@@ -134,9 +164,9 @@ fn process_file(
     // File needs changes.
     if check_mode {
         if show_diff {
-            print_diff(file_path, &source, &sorted);
+            print_diff(file_path, &source, &sorted, use_color);
         } else if !quiet {
-            eprintln!("{}: would be resorted", file_path.display());
+            warn!(file = %file_path.display(), "would be resorted");
         }
     } else {
         std::fs::write(file_path, &sorted).map_err(|e| LortError::Io {
@@ -144,7 +174,7 @@ fn process_file(
             source: e,
         })?;
         if !quiet {
-            eprintln!("{}: sorted", file_path.display());
+            info!(file = %file_path.display(), "sorted");
         }
     }
 
@@ -168,7 +198,9 @@ fn process_stdin(check_mode: bool, show_diff: bool) -> Result<bool> {
     }
 
     if check_mode && show_diff {
-        print_diff(&stdin_path, &source, &sorted);
+        // stdin mode: color only if stdout is a terminal.
+        let use_color = io::stdout().is_terminal();
+        print_diff(&stdin_path, &source, &sorted, use_color);
     } else {
         print!("{sorted}");
     }
@@ -177,15 +209,60 @@ fn process_stdin(check_mode: bool, show_diff: bool) -> Result<bool> {
 }
 
 /// Print a unified diff between original and sorted content.
-fn print_diff(path: &Path, original: &str, sorted: &str) {
+///
+/// When `use_color` is true, applies ANSI colors:
+/// - Red for removed lines (`-`)
+/// - Green for added lines (`+`)
+/// - Cyan for hunk headers (`@@`)
+/// - Bold for file headers (`---`/`+++`)
+fn print_diff(path: &Path, original: &str, sorted: &str, use_color: bool) {
     let diff = TextDiff::from_lines(original, sorted);
     let display_path = path.display();
 
-    println!("--- {display_path}");
-    println!("+++ {display_path}");
+    if use_color {
+        println!("{}", format_args!("--- {display_path}").bold());
+        println!("{}", format_args!("+++ {display_path}").bold());
+    } else {
+        println!("--- {display_path}");
+        println!("+++ {display_path}");
+    }
 
+    // Iterate over hunks and their individual change lines for
+    // per-line coloring. The `unified_diff` formatter only gives
+    // us pre-rendered strings — iterating changes directly gives
+    // control over each line's color.
     for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
-        println!("{hunk}");
+        let header = hunk.header().to_string();
+        if use_color {
+            println!("{}", header.cyan());
+        } else {
+            print!("{header}");
+        }
+
+        for change in hunk.iter_changes() {
+            let sign = match change.tag() {
+                ChangeTag::Delete => "-",
+                ChangeTag::Insert => "+",
+                ChangeTag::Equal => " ",
+            };
+            let line = format!("{sign}{change}");
+
+            if use_color {
+                match change.tag() {
+                    ChangeTag::Delete => print!("{}", line.red()),
+                    ChangeTag::Insert => print!("{}", line.green()),
+                    ChangeTag::Equal => print!("{line}"),
+                }
+            } else {
+                print!("{line}");
+            }
+
+            // `similar` change values don't always end with a newline
+            // (e.g. the last line of a file without a trailing newline).
+            if change.missing_newline() {
+                println!();
+            }
+        }
     }
 }
 
