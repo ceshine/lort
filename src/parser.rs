@@ -28,6 +28,8 @@ pub struct ImportStatement {
     pub module_path: String,
     /// Imported names for `from` imports. Empty for plain `import`.
     pub names: Vec<ImportedName>,
+    /// Alias for plain `import X as Y` statements.
+    pub alias: Option<String>,
     /// Inline comment on the same line (e.g. `# noqa`).
     pub inline_comment: Option<String>,
     /// 1-based line number in the source file.
@@ -153,12 +155,13 @@ fn parse_import_statement(
     }
 
     // Parse optional alias: `import X as Y`.
-    let (module_path, _alias) = parse_alias(code);
+    let (module_path, alias) = parse_alias(code);
 
     Ok(ImportStatement {
         kind: ImportKind::Import,
         module_path: module_path.to_string(),
         names: Vec::new(),
+        alias: alias.map(String::from),
         inline_comment: inline_comment.map(String::from),
         line_number,
         is_relative: false, // plain `import` can't be relative
@@ -264,6 +267,7 @@ fn parse_from_import(
                     kind: ImportKind::FromImport,
                     module_path: module_path.to_string(),
                     names,
+                    alias: None,
                     inline_comment,
                     line_number,
                     is_relative,
@@ -280,6 +284,7 @@ fn parse_from_import(
                 kind: ImportKind::FromImport,
                 module_path: module_path.to_string(),
                 names,
+                alias: None,
                 inline_comment,
                 line_number,
                 is_relative,
@@ -299,6 +304,7 @@ fn parse_from_import(
             kind: ImportKind::FromImport,
             module_path: module_path.to_string(),
             names,
+            alias: None,
             inline_comment: inline_comment.map(String::from),
             line_number,
             is_relative,
@@ -378,6 +384,11 @@ pub fn reconstruct_import(stmt: &ImportStatement) -> String {
         ImportKind::Import => {
             out.push_str("import ");
             out.push_str(&stmt.module_path);
+            // Handle alias for `import X as Y`.
+            if let Some(ref alias) = stmt.alias {
+                out.push_str(" as ");
+                out.push_str(alias);
+            }
         }
         ImportKind::FromImport => {
             out.push_str("from ");
@@ -563,6 +574,7 @@ mod tests {
             kind: ImportKind::Import,
             module_path: "os".to_string(),
             names: Vec::new(),
+            alias: None,
             inline_comment: None,
             line_number: 1,
             is_relative: false,
@@ -587,6 +599,7 @@ mod tests {
                     alias: None,
                 },
             ],
+            alias: None,
             inline_comment: Some("# utils".to_string()),
             line_number: 1,
             is_relative: false,
@@ -618,6 +631,7 @@ mod tests {
                     alias: None,
                 },
             ],
+            alias: None,
             inline_comment: None,
             line_number: 1,
             is_relative: false,

@@ -277,3 +277,56 @@ fn edge_multiline_mixed_with_single_line() {
          from sync_tools.models import SyncMode, SyncOperation\n",
     );
 }
+
+// --- Plain `import X as Y` alias preservation ---
+
+#[test]
+fn edge_plain_import_alias_preserved() {
+    // Basic aliased import should preserve the alias
+    assert_sorts_to("import polars as pl\n", "import polars as pl\n");
+}
+
+#[test]
+fn edge_plain_import_alias_sorts_by_module_name() {
+    // Aliased imports sort by module path, not alias
+    assert_sorts_to(
+        "import tensorflow as tf\nimport polars as pl\nimport typer\n",
+        "import typer\nimport polars as pl\nimport tensorflow as tf\n",
+    );
+}
+
+#[test]
+fn edge_plain_import_alias_with_inline_comment() {
+    // Aliased import with inline comment
+    assert_sorts_to(
+        "import polars as pl  # data processing\nimport os\n",
+        "import os\nimport polars as pl  # data processing\n",
+    );
+}
+
+#[test]
+fn edge_plain_import_alias_already_sorted() {
+    // Multiple aliased imports already in correct order
+    assert_sorts_to(
+        "import os\nimport polars as pl\nimport tensorflow as tf\n",
+        "import os\nimport polars as pl\nimport tensorflow as tf\n",
+    );
+}
+
+#[test]
+fn edge_plain_import_no_alias_to_alias() {
+    // Plain import without alias, then with alias - should preserve alias in second
+    assert_sorts_to(
+        "import polars as pl\nimport os\n",
+        "import os\nimport polars as pl\n",
+    );
+}
+
+#[test]
+fn edge_mixed_plain_and_from_aliases_round_trip() {
+    // Mixed alias forms should both survive parse -> sort -> reconstruct.
+    assert_sorts_to(
+        "from os.path import join as j, abspath as ap\nimport polars as pl\nimport os\n",
+        "import os\nimport polars as pl\nfrom os.path import join as j, abspath as ap\n",
+    );
+}
