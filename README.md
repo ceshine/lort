@@ -158,7 +158,7 @@ Add to your `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/ceshine/lort
-    rev: v0.1.2  # replace with the latest tag
+    rev: v0.1.3  # replace with the latest tag
     hooks:
       - id: lort        # check mode (recommended for CI)
       # - id: lort-fix  # fix mode (rewrites files in place)
