@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::error::LortError;
 use crate::parser::{FileSegment, ImportKind, ImportStatement, reconstruct_import};
-use crate::stdlib::typing_priority;
+use crate::stdlib::is_typing_related;
 
 /// Compare two module path strings using length-first, segment-by-segment
 /// ordering.
@@ -85,9 +85,10 @@ fn compare_imported_name(a: &str, b: &str) -> Ordering {
 /// 5. Module path by length-first segment comparison.
 fn import_sort_key(stmt: &ImportStatement) -> impl Ord {
     let is_future = !stmt.is_future; // false < true, so `!` puts future first
-    // typing_priority: 0 = normal, 1 = typing-adjacent (collections.abc),
-    // 2 = typing itself. Higher values sort later (bottom of block).
-    let typing_pri = typing_priority(&stmt.module_path);
+    // Typing-related modules (`typing`, `collections.abc`, `typing_extensions`)
+    // are pinned to the bottom. Within that group, the natural length-first
+    // segment ordering already yields: typing < collections.abc < typing_extensions.
+    let is_typing = is_typing_related(&stmt.module_path);
     let is_from = stmt.kind == ImportKind::FromImport;
     // Relative imports come before absolute within the `from` group.
     // For plain `import` (never relative), this is always false.
@@ -95,7 +96,7 @@ fn import_sort_key(stmt: &ImportStatement) -> impl Ord {
 
     (
         is_future,
-        typing_pri,
+        is_typing,
         is_from,
         is_absolute,
         PathSortKey(stmt.module_path.clone()),

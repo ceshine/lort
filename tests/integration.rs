@@ -91,7 +91,15 @@ fn tc05_imported_names_sorted() {
 fn tc06_typing_pinned_to_bottom() {
     assert_sorts_to(
         "from typing import Any\nfrom collections.abc import Mapping\nimport os\nimport csv\nfrom collections import defaultdict\n",
-        "import os\nimport csv\nfrom collections import defaultdict\nfrom collections.abc import Mapping\nfrom typing import Any\n",
+        "import os\nimport csv\nfrom collections import defaultdict\nfrom typing import Any\nfrom collections.abc import Mapping\n",
+    );
+}
+
+#[test]
+fn tc06b_typing_group_order() {
+    assert_sorts_to(
+        "from typing_extensions import Protocol\nfrom collections.abc import Mapping\nfrom typing import Any\nimport os\n",
+        "import os\nfrom typing import Any\nfrom collections.abc import Mapping\nfrom typing_extensions import Protocol\n",
     );
 }
 

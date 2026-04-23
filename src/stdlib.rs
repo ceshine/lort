@@ -1,8 +1,10 @@
-//! Typing-related import prioritization for Python import sorting.
+//! Typing-related import detection for Python import sorting.
 //!
 //! Stdlib vs third-party classification is delegated to ruff; this module
-//! only handles pinning type-annotation imports (`typing`, `typing_extensions`,
-//! `collections.abc`) to the bottom of the stdlib section.
+//! only identifies type-annotation imports (`typing`, `typing_extensions`,
+//! `collections.abc`) so they can be pinned to the bottom of the stdlib
+//! section. Ordering within that group is handled by the natural
+//! length-first segment sort in [`crate::sorter::compare_module_path`].
 
 /// Module paths whose `from` imports are treated as type-annotation-related
 /// and pinned to the bottom of the stdlib section.
@@ -20,26 +22,6 @@ const TYPING_MODULES: &[&str] = &["typing", "typing_extensions", "collections.ab
 /// `true` if the path matches one of the known typing-related modules.
 pub fn is_typing_related(module_path: &str) -> bool {
     TYPING_MODULES.contains(&module_path)
-}
-
-/// Return a priority value for typing-related modules within the
-/// typing group.
-///
-/// `typing` itself is always last (highest priority value).
-/// Non-typing modules get 0 (they are sorted normally elsewhere).
-///
-/// # Returns
-///
-/// A `u8` priority: 0 = not typing, 1 = other typing modules,
-/// 2 = `typing` itself (always at the very bottom).
-pub fn typing_priority(module_path: &str) -> u8 {
-    if module_path == "typing" {
-        2
-    } else if is_typing_related(module_path) {
-        1
-    } else {
-        0
-    }
 }
 
 #[cfg(test)]
