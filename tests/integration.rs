@@ -168,6 +168,31 @@ fn tc13_relative_before_absolute() {
     );
 }
 
+#[test]
+fn tc13b_relative_sorted_by_dot_count() {
+    // 2-dot relative would sort before 1-dot under pure length-first rules.
+    assert_sorts_to(
+        "from ...deep import C\nfrom ..parent import B\nfrom .local import A\nfrom absolute_module import X\n",
+        "from .local import A\nfrom ..parent import B\nfrom ...deep import C\nfrom absolute_module import X\n",
+    );
+}
+
+#[test]
+fn tc13c_relative_same_dots_length_first() {
+    assert_sorts_to(
+        "from .collections import X\nfrom .os import Y\nfrom .abc import Z\nfrom absolute_module import W\n",
+        "from .os import Y\nfrom .abc import Z\nfrom .collections import X\nfrom absolute_module import W\n",
+    );
+}
+
+#[test]
+fn tc13d_relative_and_absolute_mixed_with_import_subsection() {
+    assert_sorts_to(
+        "import collections\nimport os\nfrom ...deep import C\nfrom absolute_first import X\nfrom ..parent import B\nfrom .local import A\nfrom another_absolute import Y\n",
+        "import os\nimport collections\nfrom .local import A\nfrom ..parent import B\nfrom ...deep import C\nfrom absolute_first import X\nfrom another_absolute import Y\n",
+    );
+}
+
 // --- TC-14: Guarded imports are ignored ---
 
 #[test]

@@ -75,13 +75,29 @@ fn compare_imported_name(a: &str, b: &str) -> Ordering {
     a.cmp(b)
 }
 
+/// Number of leading dots in a relative import's module path.
+///
+/// Returns `0` for a single-dot relative import (e.g. `.common`),
+/// `1` for two dots (e.g. `..parent`), etc.
+/// For absolute imports, returns `usize::MAX` so they sort after all relatives.
+fn dot_tier(stmt: &ImportStatement) -> usize {
+    if !stmt.is_relative {
+        return usize::MAX;
+    }
+    stmt.module_path
+        .chars()
+        .take_while(|&c| c == '.')
+        .count()
+        .saturating_sub(1)
+}
+
 /// Composite sort key for an import statement within a block.
 ///
 /// The ordering is:
 /// 1. `__future__` imports first (preserved at top).
 /// 2. Non-typing before typing (typing pinned to bottom).
 /// 3. `import` before `from`.
-/// 4. Relative `from` before absolute `from`.
+/// 4. Relative `from` before absolute `from`, sorted by ascending dot count.
 /// 5. Module path by length-first segment comparison.
 fn import_sort_key(stmt: &ImportStatement) -> impl Ord {
     let is_future = !stmt.is_future; // false < true, so `!` puts future first
@@ -90,15 +106,12 @@ fn import_sort_key(stmt: &ImportStatement) -> impl Ord {
     // segment ordering already yields: typing < collections.abc < typing_extensions.
     let is_typing = is_typing_related(&stmt.module_path);
     let is_from = stmt.kind == ImportKind::FromImport;
-    // Relative imports come before absolute within the `from` group.
-    // For plain `import` (never relative), this is always false.
-    let is_absolute = !stmt.is_relative;
 
     (
         is_future,
         is_typing,
         is_from,
-        is_absolute,
+        dot_tier(stmt),
         PathSortKey(stmt.module_path.clone()),
     )
 }
@@ -422,5 +435,79 @@ mod tests {
         ];
         let result = validate_future_imports(&block, Path::new("test.py"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sort_block_relative_by_dot_count() {
+        let mut block = vec![
+            ImportStatement {
+                kind: ImportKind::FromImport,
+                module_path: "..parent".to_string(),
+                names: vec![ImportedName {
+                    name: "B".to_string(),
+                    alias: None,
+                }],
+                alias: None,
+                inline_comment: None,
+                line_number: 1,
+                is_relative: true,
+                is_future: false,
+                is_multiline: false,
+            },
+            ImportStatement {
+                kind: ImportKind::FromImport,
+                module_path: ".local".to_string(),
+                names: vec![ImportedName {
+                    name: "A".to_string(),
+                    alias: None,
+                }],
+                alias: None,
+                inline_comment: None,
+                line_number: 2,
+                is_relative: true,
+                is_future: false,
+                is_multiline: false,
+            },
+        ];
+        sort_import_block(&mut block);
+        assert_eq!(block[0].module_path, ".local");
+        assert_eq!(block[1].module_path, "..parent");
+    }
+
+    #[test]
+    fn test_sort_block_relative_same_dots_length_first() {
+        let mut block = vec![
+            ImportStatement {
+                kind: ImportKind::FromImport,
+                module_path: ".abc".to_string(),
+                names: vec![ImportedName {
+                    name: "Z".to_string(),
+                    alias: None,
+                }],
+                alias: None,
+                inline_comment: None,
+                line_number: 1,
+                is_relative: true,
+                is_future: false,
+                is_multiline: false,
+            },
+            ImportStatement {
+                kind: ImportKind::FromImport,
+                module_path: ".os".to_string(),
+                names: vec![ImportedName {
+                    name: "Y".to_string(),
+                    alias: None,
+                }],
+                alias: None,
+                inline_comment: None,
+                line_number: 2,
+                is_relative: true,
+                is_future: false,
+                is_multiline: false,
+            },
+        ];
+        sort_import_block(&mut block);
+        assert_eq!(block[0].module_path, ".os");
+        assert_eq!(block[1].module_path, ".abc");
     }
 }
