@@ -158,7 +158,7 @@ Add to your `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/ceshine/lort
-    rev: v0.1.3  # replace with the latest tag
+    rev: v0.1.6  # replace with the latest tag
     hooks:
       - id: lort        # check mode (recommended for CI)
       # - id: lort-fix  # fix mode (rewrites files in place)
@@ -212,6 +212,28 @@ lort .              # length-first import sorting
 ```
 
 Run `ruff format` before `lort` so that any unsupported constructs are resolved first.
+
+## Release Notes
+
+### v0.1.6
+
+Bug fixes:
+
+- **Lines inside triple-quoted strings are no longer parsed as imports.** Previously, an
+  unindented line starting with `import ` or `from ` inside a module docstring or another
+  triple-quoted string was treated as an import. Prose such as `import from the modules, ...`
+  made valid files fail with a parse error, and two or more import-like lines in a string were
+  sorted, silently rewriting the string.
+- **Comments inside parenthesized `from` imports are preserved.** Previously, comments after
+  names and comment-only lines inside the parentheses were dropped. A comment after `(` that
+  contained a comma (such as `# noqa: F401, E501`) produced a bogus imported name, a `)` inside a
+  comment ended the import early and produced invalid Python, and a comment after a one-line
+  `(a, b)` import was lost. Comments now follow these rules:
+  - A comment after a name moves with that name when names are sorted. When several names share
+    a line, the comment goes with the last of them.
+  - A comment-only line is a boundary: the names above it and the names below it are sorted
+    separately, as import statements around a comment line are.
+  - Comments on the `(` and `)` lines stay where they are, unless a name shares the line.
 
 ## AI Use Disclosure
 
