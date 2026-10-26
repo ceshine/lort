@@ -13,7 +13,7 @@ From `PURE-PYTHON-UV.md`, imports within each section must be sorted by these ru
 7. **No multi-name `import` statements**: `import a, b` is not supported. The tool should raise an error and instruct the user to run `ruff format` first to split these into separate statements.
 8. **`__future__` imports** are preserved at the top of each section. The tool assumes imports have already been sectioned per PEP 8; if `__future__` imports are found mixed with non-`__future__` imports in the same contiguous block, the tool should raise an error.
 9. **Star imports** (`from module import *`): `*` is treated as a single name with length 1 for sorting purposes.
-10. **Comments above imports stay in place**: inline comments on the same line as an import travel with the import, but comment-only lines above an import do **not** move. This practice (comment-above-import) is discouraged.
+10. **Comments above imports stay in place**: inline comments on the same line as an import travel with the import, but comment-only lines above an import do **not** move. This practice (comment-above-import) is discouraged. The same rules apply inside a parenthesized `from` import: a comment after a name travels with that name, and a comment-only line is a boundary (names on each side are sorted separately). When names share a line, including the `(` line, the line's comment goes with the last of them. Otherwise, comments on the `(` and `)` lines stay put.
 11. **Aliased imports** (`import numpy as np`, `from os.path import join as j`): the sort key uses the **original name**, not the alias.
 12. **Relative imports** (`from . import foo`, `from ..bar import baz`): belong to the local section. Within a section, all relative imports (starting with `.`) sort **before** absolute imports. Within each of those two groups, sort by the standard length-first rules.
 13. **Backslash continuations** are not supported. The tool should raise an error and instruct the user to run `ruff format` first to convert them to parenthesized form.
@@ -523,6 +523,7 @@ import csv
 | Multi-line parenthesized imports | Supported |
 | Inline comments on import lines | Supported — travel with the import |
 | Comment-only lines above imports | Stay in place (discouraged practice) |
+| Comments inside parenthesized `from` imports | Comment after a name travels with it; comment-only lines are boundaries |
 | `__future__` imports | Preserved at top; error if mixed with non-`__future__` in same block |
 | Star imports (`from x import *`) | `*` treated as name with length 1 |
 | Aliased imports | Sort by original name, not alias |

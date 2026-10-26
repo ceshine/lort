@@ -140,10 +140,34 @@ impl PartialOrd for PathSortKey {
 
 /// Sort the imported names within a `from` import by length then alpha.
 ///
+/// Comment-only lines inside the parentheses are boundaries: the names between
+/// two of them are sorted as a group and never cross them.
+///
 /// Modifies the statement in place.
 fn sort_imported_names(stmt: &mut ImportStatement) {
-    stmt.names
-        .sort_by(|a, b| compare_imported_name(&a.name, &b.name));
+    // Checked only in debug builds; the parser always upholds it.
+    debug_assert!(
+        stmt.comment_lines
+            .windows(2)
+            .all(|pair| pair[0].names_before <= pair[1].names_before)
+            && stmt
+                .comment_lines
+                .last()
+                .is_none_or(|line| line.names_before <= stmt.names.len()),
+        "comment line positions must not decrease or exceed the name count"
+    );
+    let mut group_start = 0;
+    let group_ends = stmt
+        .comment_lines
+        .iter()
+        .map(|line| line.names_before)
+        .chain(std::iter::once(stmt.names.len()));
+    // Rust allows borrowing `stmt.names` mutably while `group_ends` borrows
+    // `stmt.comment_lines`, because the two are different fields.
+    for group_end in group_ends {
+        stmt.names[group_start..group_end].sort_by(|a, b| compare_imported_name(&a.name, &b.name));
+        group_start = group_end;
+    }
 }
 
 /// Sort a contiguous block of import statements according to the spec.
@@ -251,7 +275,7 @@ pub fn sort_and_reconstruct(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::ImportedName;
+    use crate::parser::{CommentLine, ImportedName};
 
     #[test]
     fn test_compare_module_path_length_first() {
@@ -295,18 +319,22 @@ mod tests {
                 ImportedName {
                     name: "Optional".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 },
                 ImportedName {
                     name: "Any".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 },
                 ImportedName {
                     name: "List".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 },
                 ImportedName {
                     name: "Dict".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 },
             ],
             alias: None,
@@ -315,10 +343,42 @@ mod tests {
             is_relative: false,
             is_future: false,
             is_multiline: false,
+            open_paren_comment: None,
+            comment_lines: Vec::new(),
         };
         sort_imported_names(&mut stmt);
         let names: Vec<&str> = stmt.names.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(names, vec!["Any", "Dict", "List", "Optional"]);
+    }
+
+    #[test]
+    fn test_sort_imported_names_comment_lines_are_boundaries() {
+        let mut stmt = ImportStatement {
+            kind: ImportKind::FromImport,
+            module_path: "x".to_string(),
+            names: ["dd", "c", "bb", "a"]
+                .into_iter()
+                .map(|name| ImportedName {
+                    name: name.to_string(),
+                    alias: None,
+                    trailing_comment: None,
+                })
+                .collect(),
+            alias: None,
+            inline_comment: None,
+            line_number: 1,
+            is_relative: false,
+            is_future: false,
+            is_multiline: true,
+            open_paren_comment: None,
+            comment_lines: vec![CommentLine {
+                names_before: 2,
+                text: "# group".to_string(),
+            }],
+        };
+        sort_imported_names(&mut stmt);
+        let names: Vec<&str> = stmt.names.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["c", "dd", "a", "bb"]);
     }
 
     #[test]
@@ -330,6 +390,7 @@ mod tests {
                 names: vec![ImportedName {
                     name: "join".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 }],
                 alias: None,
                 inline_comment: None,
@@ -337,6 +398,8 @@ mod tests {
                 is_relative: false,
                 is_future: false,
                 is_multiline: false,
+                open_paren_comment: None,
+                comment_lines: Vec::new(),
             },
             ImportStatement {
                 kind: ImportKind::Import,
@@ -348,6 +411,8 @@ mod tests {
                 is_relative: false,
                 is_future: false,
                 is_multiline: false,
+                open_paren_comment: None,
+                comment_lines: Vec::new(),
             },
         ];
         sort_import_block(&mut block);
@@ -364,6 +429,7 @@ mod tests {
                 names: vec![ImportedName {
                     name: "Any".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 }],
                 alias: None,
                 inline_comment: None,
@@ -371,6 +437,8 @@ mod tests {
                 is_relative: false,
                 is_future: false,
                 is_multiline: false,
+                open_paren_comment: None,
+                comment_lines: Vec::new(),
             },
             ImportStatement {
                 kind: ImportKind::Import,
@@ -382,6 +450,8 @@ mod tests {
                 is_relative: false,
                 is_future: false,
                 is_multiline: false,
+                open_paren_comment: None,
+                comment_lines: Vec::new(),
             },
             ImportStatement {
                 kind: ImportKind::FromImport,
@@ -389,6 +459,7 @@ mod tests {
                 names: vec![ImportedName {
                     name: "defaultdict".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 }],
                 alias: None,
                 inline_comment: None,
@@ -396,6 +467,8 @@ mod tests {
                 is_relative: false,
                 is_future: false,
                 is_multiline: false,
+                open_paren_comment: None,
+                comment_lines: Vec::new(),
             },
         ];
         sort_import_block(&mut block);
@@ -413,6 +486,7 @@ mod tests {
                 names: vec![ImportedName {
                     name: "annotations".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 }],
                 alias: None,
                 inline_comment: None,
@@ -420,6 +494,8 @@ mod tests {
                 is_relative: false,
                 is_future: true,
                 is_multiline: false,
+                open_paren_comment: None,
+                comment_lines: Vec::new(),
             },
             ImportStatement {
                 kind: ImportKind::Import,
@@ -431,6 +507,8 @@ mod tests {
                 is_relative: false,
                 is_future: false,
                 is_multiline: false,
+                open_paren_comment: None,
+                comment_lines: Vec::new(),
             },
         ];
         let result = validate_future_imports(&block, Path::new("test.py"));
@@ -446,6 +524,7 @@ mod tests {
                 names: vec![ImportedName {
                     name: "B".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 }],
                 alias: None,
                 inline_comment: None,
@@ -453,6 +532,8 @@ mod tests {
                 is_relative: true,
                 is_future: false,
                 is_multiline: false,
+                open_paren_comment: None,
+                comment_lines: Vec::new(),
             },
             ImportStatement {
                 kind: ImportKind::FromImport,
@@ -460,6 +541,7 @@ mod tests {
                 names: vec![ImportedName {
                     name: "A".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 }],
                 alias: None,
                 inline_comment: None,
@@ -467,6 +549,8 @@ mod tests {
                 is_relative: true,
                 is_future: false,
                 is_multiline: false,
+                open_paren_comment: None,
+                comment_lines: Vec::new(),
             },
         ];
         sort_import_block(&mut block);
@@ -483,6 +567,7 @@ mod tests {
                 names: vec![ImportedName {
                     name: "Z".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 }],
                 alias: None,
                 inline_comment: None,
@@ -490,6 +575,8 @@ mod tests {
                 is_relative: true,
                 is_future: false,
                 is_multiline: false,
+                open_paren_comment: None,
+                comment_lines: Vec::new(),
             },
             ImportStatement {
                 kind: ImportKind::FromImport,
@@ -497,6 +584,7 @@ mod tests {
                 names: vec![ImportedName {
                     name: "Y".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 }],
                 alias: None,
                 inline_comment: None,
@@ -504,6 +592,8 @@ mod tests {
                 is_relative: true,
                 is_future: false,
                 is_multiline: false,
+                open_paren_comment: None,
+                comment_lines: Vec::new(),
             },
         ];
         sort_import_block(&mut block);

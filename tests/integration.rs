@@ -524,3 +524,69 @@ fn string_triple_quote_in_single_quoted_string_does_not_open_a_string() {
         "X = '\"\"\"'\nimport a\nimport zzz_long_name\n",
     );
 }
+
+// --- Comments inside parenthesized `from` imports ---
+//
+// A comment after a name travels with the name. Comment-only lines are
+// boundaries: names on each side are sorted separately, as import statements
+// around a comment line are. Comments on the `(` and `)` lines stay put.
+
+#[test]
+fn paren_comment_after_name_travels_with_name() {
+    assert_sorts_to(
+        "from x import (\n    bb,  # note bb\n    a,  # note a\n)  # trailing\n",
+        "from x import (\n    a,  # note a\n    bb,  # note bb\n)  # trailing\n",
+    );
+}
+
+#[test]
+fn paren_comment_lines_are_boundaries() {
+    assert_sorts_to(
+        r#"from app import (
+    # models
+    UserModel,
+    Org,
+    # utils
+    slugify,
+    cache,
+    # end
+)
+"#,
+        r#"from app import (
+    # models
+    Org,
+    UserModel,
+    # utils
+    cache,
+    slugify,
+    # end
+)
+"#,
+    );
+}
+
+#[test]
+fn paren_comment_with_comma_after_open_paren_is_not_a_name() {
+    // The comma used to split off `E501` as an imported name.
+    assert_sorts_to(
+        "from x import (  # noqa: F401, E501\n    bb,\n    a,\n)\n",
+        "from x import (  # noqa: F401, E501\n    a,\n    bb,\n)\n",
+    );
+}
+
+#[test]
+fn paren_in_comment_does_not_close_the_import() {
+    // The `)` in the comment used to end the import early, leaving invalid code.
+    assert_sorts_to(
+        "from x import (\n    bb,  # see (foo)\n    a,\n)\n",
+        "from x import (\n    a,\n    bb,  # see (foo)\n)\n",
+    );
+}
+
+#[test]
+fn paren_comment_after_single_line_parens_is_kept() {
+    assert_sorts_to(
+        "from x import (bb, a)  # noqa\n",
+        "from x import a, bb  # noqa\n",
+    );
+}

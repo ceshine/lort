@@ -12,11 +12,27 @@ pub enum ImportKind {
 /// A single imported name, optionally aliased.
 ///
 /// For `from os.path import join as j`, this would be
-/// `ImportedName { name: "join", alias: Some("j") }`.
+/// `ImportedName { name: "join", alias: Some("j"), trailing_comment: None }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportedName {
     pub name: String,
     pub alias: Option<String>,
+    /// Comment after the name on its line in a multi-line `from` import.
+    /// It travels with the name when names are sorted.
+    pub trailing_comment: Option<String>,
+}
+
+/// A comment-only line inside the parentheses of a multi-line `from` import.
+///
+/// It stays in place when names are sorted: the names before it and the names
+/// after it are sorted separately, as import statements around a comment line are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentLine {
+    /// Number of imported names that precede the comment. Must not exceed the
+    /// statement's name count.
+    pub names_before: usize,
+    /// The comment text, including the `#`.
+    pub text: String,
 }
 
 /// A parsed import statement with all metadata needed for sorting
@@ -30,8 +46,14 @@ pub struct ImportStatement {
     pub names: Vec<ImportedName>,
     /// Alias for plain `import X as Y` statements.
     pub alias: Option<String>,
-    /// Inline comment on the same line (e.g. `# noqa`).
+    /// Inline comment on the same line (e.g. `# noqa`). For a parenthesized
+    /// import, the comment after the closing paren.
     pub inline_comment: Option<String>,
+    /// Comment after the opening paren of a multi-line `from` import.
+    pub open_paren_comment: Option<String>,
+    /// Comment-only lines inside the parentheses of a multi-line `from` import,
+    /// in source order, so their `names_before` values never decrease.
+    pub comment_lines: Vec<CommentLine>,
     /// 1-based line number in the source file.
     pub line_number: usize,
     /// Whether this is a relative import (starts with `.`).
@@ -235,6 +257,8 @@ fn parse_import_statement(
         is_relative: false, // plain `import` can't be relative
         is_future: module_path == "__future__",
         is_multiline: false,
+        open_paren_comment: None,
+        comment_lines: Vec::new(),
     })
 }
 
@@ -278,75 +302,49 @@ fn parse_from_import(
         });
     }
 
-    // Multi-line parenthesized import: `from X import (\n...\n)`
+    // Parenthesized import, on one line `from X import (a, b)` or several.
     if let Some(after_paren) = names_part.strip_prefix('(') {
-        let mut collected = String::new();
+        let mut names = Vec::new();
         let mut inline_comment = None;
-
-        // Handle case where opening paren and some names are on the same line.
-        if let Some(close) = after_paren.find(')') {
-            // Single-line parenthesized: `from X import (a, b)`
-            let (code, comment) = split_inline_comment(&after_paren[..close]);
-            collected.push_str(code.trim());
-            inline_comment = comment.map(String::from);
-        } else {
-            // True multi-line: consume until closing paren.
-            collected.push_str(after_paren.trim());
-            let mut j = start + 1;
-            while j < lines.len() {
-                let l = lines[j].trim();
-                if let Some(close) = l.find(')') {
-                    let before_close = &l[..close];
-                    let (code, comment) = split_inline_comment(before_close);
-                    if !collected.is_empty() && !code.trim().is_empty() {
-                        collected.push_str(", ");
-                    }
-                    collected.push_str(code.trim());
-                    // Check for inline comment after the closing paren.
-                    let after_close = l[close + 1..].trim();
-                    if let Some(c) = extract_comment(after_close) {
-                        inline_comment = Some(c.to_string());
-                    } else if comment.is_some() {
-                        inline_comment = comment.map(String::from);
-                    }
-                    j += 1;
-                    break;
-                }
-                // Check for backslash in multi-line import.
-                if l.ends_with('\\') {
-                    return Err(LortError::BackslashContinuation {
-                        file: file_path.to_path_buf(),
-                        line: j + 1,
-                    });
-                }
-                let (code, _comment) = split_inline_comment(l);
-                let code = code.trim();
-                if !code.is_empty() {
-                    if !collected.is_empty() {
-                        collected.push_str(", ");
-                    }
-                    collected.push_str(code);
-                }
-                j += 1;
+        let mut open_paren_comment = None;
+        let mut comment_lines = Vec::new();
+        let mut j = start;
+        let mut rest = after_paren;
+        loop {
+            // Split off the comment first, so `)` and `,` are never read from it.
+            let (code, comment) = split_inline_comment(rest);
+            let close = code.find(')');
+            let code = close.map_or(code, |pos| &code[..pos]);
+            if close.is_none() && code.ends_with('\\') {
+                return Err(LortError::BackslashContinuation {
+                    file: file_path.to_path_buf(),
+                    line: j + 1,
+                });
             }
-            let names = parse_name_list(&collected);
-            return Ok((
-                ImportStatement {
-                    kind: ImportKind::FromImport,
-                    module_path: module_path.to_string(),
-                    names,
-                    alias: None,
-                    inline_comment,
-                    line_number,
-                    is_relative,
-                    is_future,
-                    is_multiline: true,
-                },
-                j - start,
-            ));
+            let mut line_names = parse_name_list(code);
+            let comment = comment.map(String::from);
+            if close.is_some() {
+                // A comment after `)` belongs to the whole statement.
+                inline_comment = comment;
+            } else if let Some(last) = line_names.last_mut() {
+                last.trailing_comment = comment;
+            } else if j == start {
+                open_paren_comment = comment;
+            } else if let Some(text) = comment {
+                comment_lines.push(CommentLine {
+                    names_before: names.len(),
+                    text,
+                });
+            }
+            // `append` moves all elements of `line_names` into `names`.
+            names.append(&mut line_names);
+            j += 1;
+            if close.is_some() || j == lines.len() {
+                break;
+            }
+            rest = lines[j].trim();
         }
-
-        let names = parse_name_list(&collected);
+        let lines_consumed = j - start;
         return Ok((
             ImportStatement {
                 kind: ImportKind::FromImport,
@@ -357,9 +355,11 @@ fn parse_from_import(
                 line_number,
                 is_relative,
                 is_future,
-                is_multiline: false,
+                is_multiline: lines_consumed > 1,
+                open_paren_comment,
+                comment_lines,
             },
-            1,
+            lines_consumed,
         ));
     }
 
@@ -378,6 +378,8 @@ fn parse_from_import(
             is_relative,
             is_future,
             is_multiline: false,
+            open_paren_comment: None,
+            comment_lines: Vec::new(),
         },
         1,
     ))
@@ -395,6 +397,7 @@ fn parse_name_list(s: &str) -> Vec<ImportedName> {
             ImportedName {
                 name: name.to_string(),
                 alias: alias.map(String::from),
+                trailing_comment: None,
             }
         })
         .collect()
@@ -428,11 +431,6 @@ fn split_inline_comment(s: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// Extract a comment from a string that might be just a comment.
-fn extract_comment(s: &str) -> Option<&str> {
-    if s.starts_with('#') { Some(s) } else { None }
-}
-
 /// Reconstruct an [`ImportStatement`] back into source code.
 ///
 /// Preserves multi-line parenthesized format when the original used it.
@@ -463,38 +461,65 @@ pub fn reconstruct_import(stmt: &ImportStatement) -> String {
             out.push_str(&stmt.module_path);
             out.push_str(" import ");
 
-            // Format each name, handling optional aliases.
-            let names: Vec<String> = stmt
-                .names
-                .iter()
-                .map(|n| match &n.alias {
-                    Some(a) => format!("{} as {}", n.name, a),
-                    None => n.name.clone(),
-                })
-                .collect();
-
             if stmt.is_multiline {
                 // Reconstruct parenthesized multi-line form with
                 // 4-space indentation per PEP 8 / black / ruff defaults.
                 out.push('(');
-                for name in &names {
+                push_inline_comment(&mut out, stmt.open_paren_comment.as_deref());
+                // `peekable` allows `next_if`, which takes the next comment line
+                // only when it belongs before the current name.
+                let mut comment_lines = stmt.comment_lines.iter().peekable();
+                for (index, name) in stmt.names.iter().enumerate() {
+                    while let Some(line) = comment_lines.next_if(|c| c.names_before == index) {
+                        push_comment_line(&mut out, &line.text);
+                    }
                     out.push_str("\n    ");
-                    out.push_str(name);
+                    push_imported_name(&mut out, name);
                     out.push(',');
+                    push_inline_comment(&mut out, name.trailing_comment.as_deref());
+                }
+                // Comment lines after the last name.
+                for line in comment_lines {
+                    push_comment_line(&mut out, &line.text);
                 }
                 out.push_str("\n)");
             } else {
-                out.push_str(&names.join(", "));
+                for (index, name) in stmt.names.iter().enumerate() {
+                    if index > 0 {
+                        out.push_str(", ");
+                    }
+                    push_imported_name(&mut out, name);
+                }
             }
         }
     }
 
-    if let Some(ref comment) = stmt.inline_comment {
+    push_inline_comment(&mut out, stmt.inline_comment.as_deref());
+
+    out
+}
+
+/// Append `name` or `name as alias` to `out`.
+fn push_imported_name(out: &mut String, name: &ImportedName) {
+    out.push_str(&name.name);
+    if let Some(alias) = &name.alias {
+        out.push_str(" as ");
+        out.push_str(alias);
+    }
+}
+
+/// Append `comment` to `out` on a new line, indented inside the parentheses.
+fn push_comment_line(out: &mut String, comment: &str) {
+    out.push_str("\n    ");
+    out.push_str(comment);
+}
+
+/// Append `comment`, preceded by two spaces, to `out` if there is one.
+fn push_inline_comment(out: &mut String, comment: Option<&str>) {
+    if let Some(comment) = comment {
         out.push_str("  ");
         out.push_str(comment);
     }
-
-    out
 }
 
 #[cfg(test)]
@@ -686,6 +711,8 @@ mod tests {
             is_relative: false,
             is_future: false,
             is_multiline: false,
+            open_paren_comment: None,
+            comment_lines: Vec::new(),
         };
         assert_eq!(reconstruct_import(&stmt), "import os");
     }
@@ -699,10 +726,12 @@ mod tests {
                 ImportedName {
                     name: "join".to_string(),
                     alias: Some("j".to_string()),
+                    trailing_comment: None,
                 },
                 ImportedName {
                     name: "exists".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 },
             ],
             alias: None,
@@ -711,6 +740,8 @@ mod tests {
             is_relative: false,
             is_future: false,
             is_multiline: false,
+            open_paren_comment: None,
+            comment_lines: Vec::new(),
         };
         assert_eq!(
             reconstruct_import(&stmt),
@@ -727,14 +758,17 @@ mod tests {
                 ImportedName {
                     name: "build_copy_plan".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 },
                 ImportedName {
                     name: "display_sync_plan".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 },
                 ImportedName {
                     name: "execute_sync_plan".to_string(),
                     alias: None,
+                    trailing_comment: None,
                 },
             ],
             alias: None,
@@ -743,6 +777,8 @@ mod tests {
             is_relative: false,
             is_future: false,
             is_multiline: true,
+            open_paren_comment: None,
+            comment_lines: Vec::new(),
         };
         assert_eq!(
             reconstruct_import(&stmt),
@@ -766,6 +802,59 @@ mod tests {
                     reconstructed,
                     "from typing import (\n    Any,\n    Dict,\n    List,\n)"
                 );
+            }
+            _ => panic!("expected Import segment"),
+        }
+    }
+
+    #[test]
+    fn test_parse_parenthesized_comments() {
+        let source =
+            "from x import (  # open\n    # lead\n    a,  # trail\n    b,\n    # end\n)  # close\n";
+        let segments = parse_file(source, &test_path()).unwrap();
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            FileSegment::Import(stmt) => {
+                assert_eq!(stmt.open_paren_comment.as_deref(), Some("# open"));
+                assert_eq!(stmt.inline_comment.as_deref(), Some("# close"));
+                assert_eq!(stmt.names[0].trailing_comment.as_deref(), Some("# trail"));
+                assert_eq!(stmt.names[1].trailing_comment, None);
+                let comment_lines: Vec<(usize, &str)> = stmt
+                    .comment_lines
+                    .iter()
+                    .map(|c| (c.names_before, c.text.as_str()))
+                    .collect();
+                assert_eq!(comment_lines, vec![(0, "# lead"), (2, "# end")]);
+                assert_eq!(reconstruct_import(stmt), source.trim_end());
+            }
+            _ => panic!("expected Import segment"),
+        }
+    }
+
+    #[test]
+    fn test_parse_parenthesized_comment_with_comma_and_paren() {
+        let source = "from x import (  # noqa: F401, E501\n    c,  # see (d)\n    e,\n)\n";
+        let segments = parse_file(source, &test_path()).unwrap();
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            FileSegment::Import(stmt) => {
+                let names: Vec<&str> = stmt.names.iter().map(|n| n.name.as_str()).collect();
+                assert_eq!(names, vec!["c", "e"]);
+                assert_eq!(stmt.names[0].trailing_comment.as_deref(), Some("# see (d)"));
+            }
+            _ => panic!("expected Import segment"),
+        }
+    }
+
+    #[test]
+    fn test_parse_single_line_parenthesized_comment() {
+        let source = "from x import (a, b)  # noqa\n";
+        let segments = parse_file(source, &test_path()).unwrap();
+        match &segments[0] {
+            FileSegment::Import(stmt) => {
+                assert!(!stmt.is_multiline);
+                assert_eq!(stmt.inline_comment.as_deref(), Some("# noqa"));
+                assert_eq!(reconstruct_import(stmt), "from x import a, b  # noqa");
             }
             _ => panic!("expected Import segment"),
         }
