@@ -53,7 +53,8 @@ pub enum FileSegment {
 /// Parse a Python source file into a sequence of [`FileSegment`]s.
 ///
 /// Only parses top-level import statements. Imports inside `if` guards
-/// (`if TYPE_CHECKING:`, `try/except`, etc.) are treated as non-import lines.
+/// (`if TYPE_CHECKING:`, `try/except`, etc.) are treated as non-import lines,
+/// as are lines that start inside a triple-quoted string (e.g. a docstring).
 ///
 /// # Arguments
 ///
@@ -69,6 +70,8 @@ pub fn parse_file(source: &str, file_path: &Path) -> Result<Vec<FileSegment>, Lo
     let lines: Vec<&str> = source.lines().collect();
     let mut segments = Vec::with_capacity(lines.len());
     let mut i = 0;
+    // Quote byte of the triple-quoted string open at the start of the current line.
+    let mut open_string: Option<u8> = None;
     // Track indentation depth to skip guarded imports.
     // We only parse imports at column 0 (no leading whitespace).
     // NOTE for Rust newcomers: `while` with manual index is used here
@@ -77,9 +80,13 @@ pub fn parse_file(source: &str, file_path: &Path) -> Result<Vec<FileSegment>, Lo
         let line = lines[i];
         let trimmed = line.trim();
         let line_number = i + 1; // 1-based
+        let starts_in_string = open_string.is_some();
+        // Real import lines hold no quotes outside comments, so scanning them is a no-op.
+        open_string = open_triple_quote_after(line, open_string);
 
-        // Skip empty lines and comment-only lines as non-import.
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+        // Lines inside a triple-quoted string, empty lines and comment-only
+        // lines are non-import.
+        if starts_in_string || trimmed.is_empty() || trimmed.starts_with('#') {
             segments.push(FileSegment::NonImport(line.to_string()));
             i += 1;
             continue;
@@ -130,6 +137,67 @@ pub fn parse_file(source: &str, file_path: &Path) -> Result<Vec<FileSegment>, Lo
     }
 
     Ok(segments)
+}
+
+/// Find the triple-quoted string still open at the end of `line`.
+///
+/// Scans left to right, skipping comments and single-line strings (honoring `\`
+/// escapes), so a `"""` inside `'...'` or after `#` opens nothing. An open
+/// triple-quoted string closes only on its own unescaped delimiter.
+///
+/// Works on bytes: in UTF-8, the ASCII bytes matched here never occur inside a
+/// multibyte character. String prefixes need no handling: even in a raw string, a
+/// `\` keeps the quote after it from closing the string (the `\` is kept in the value).
+///
+/// # Arguments
+///
+/// * `line` - One source line, without its newline.
+/// * `open` - Quote byte (`"` or `'`) of the triple-quoted string open at the
+///   start of the line, or `None` when the line starts in code.
+///
+/// # Returns
+///
+/// The quote byte of the triple-quoted string open at the end of the line, if any.
+fn open_triple_quote_after(line: &str, open: Option<u8>) -> Option<u8> {
+    let bytes = line.as_bytes();
+    let mut open = open;
+    let mut i = 0;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        match open {
+            Some(_) if byte == b'\\' => i += 2,
+            // `[quote; 3]` is an array of three copies, i.e. the delimiter `"""` or `'''`.
+            Some(quote) if bytes[i..].starts_with(&[quote; 3]) => {
+                open = None;
+                i += 3;
+            }
+            Some(_) => i += 1,
+            None if byte == b'#' => break,
+            None if (byte == b'"' || byte == b'\'') && bytes[i..].starts_with(&[byte; 3]) => {
+                open = Some(byte);
+                i += 3;
+            }
+            None if byte == b'"' || byte == b'\'' => i = skip_short_string(bytes, i + 1, byte),
+            None => i += 1,
+        }
+    }
+    open
+}
+
+/// Return the index just past the closing `quote` of a single-line string.
+///
+/// `start` is the index right after the opening quote. Returns `bytes.len()` when
+/// the string is not closed on this line.
+fn skip_short_string(bytes: &[u8], start: usize, quote: u8) -> usize {
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            byte if byte == quote => return i + 1,
+            _ => i += 1,
+        }
+    }
+    bytes.len()
 }
 
 /// Parse a plain `import X` or `import X as Y` statement.
@@ -566,6 +634,44 @@ mod tests {
         let segments = parse_file(source, &test_path()).unwrap();
         assert!(matches!(segments[0], FileSegment::NonImport(_)));
         assert!(matches!(segments[1], FileSegment::NonImport(_)));
+    }
+
+    #[test]
+    fn test_open_triple_quote_after() {
+        let cases: [(&str, Option<u8>, Option<u8>); 13] = [
+            ("x = 1", None, None),
+            ("\"\"\"Doc.", None, Some(b'"')),
+            ("X = r'''", None, Some(b'\'')),
+            ("\"\"\"Doc.\"\"\"", None, None),
+            ("\"\"\"\"\"\"", None, None),
+            ("x = ''", None, None),
+            ("# a \"\"\" here", None, None),
+            ("X = '\"\"\"'", None, None),
+            ("X = 'it\\'s' + \"\"\"", None, Some(b'"')),
+            ("Says ''' here.", Some(b'"'), Some(b'"')),
+            ("Has \\\"\"\" inside.", Some(b'"'), Some(b'"')),
+            ("X = r\"\"\"a\\\"\"\"", None, Some(b'"')),
+            ("end\"\"\" # \"\"\"", Some(b'"'), None),
+        ];
+        for (line, open, expected) in cases {
+            assert_eq!(
+                open_triple_quote_after(line, open),
+                expected,
+                "line: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_import_lines_in_docstring_are_non_import() {
+        let source = "\"\"\"Doc.\nimport os\nfrom a import b\n\"\"\"\nimport sys\n";
+        let segments = parse_file(source, &test_path()).unwrap();
+        assert!(
+            segments[..4]
+                .iter()
+                .all(|s| matches!(s, FileSegment::NonImport(_)))
+        );
+        assert!(matches!(segments[4], FileSegment::Import(_)));
     }
 
     #[test]

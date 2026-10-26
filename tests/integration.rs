@@ -363,3 +363,164 @@ fn edge_mixed_plain_and_from_aliases_round_trip() {
         "import os\nimport polars as pl\nfrom os.path import join as j, abspath as ap\n",
     );
 }
+
+// --- Triple-quoted strings: lines inside them are never imports ---
+//
+// Unindented lines inside a docstring or another triple-quoted string that start
+// with `import ` or `from ` must be left alone: parsing them raised errors on
+// valid files, and sorting them silently rewrote the string's contents.
+
+#[test]
+fn string_prose_import_line_in_docstring() {
+    // Used to be rejected as "Multi-name import statement found".
+    let source = r#""""Package doc.
+
+Nothing is re-exported here:
+import from the modules, so each name has one path.
+"""
+"#;
+    assert_sorts_to(source, source);
+}
+
+#[test]
+fn string_multi_name_import_line_in_docstring() {
+    // Would fail the multi-name check if it were code.
+    let source = "\"\"\"Doc.\n\nimport a, b\n\"\"\"\n";
+    assert_sorts_to(source, source);
+}
+
+#[test]
+fn string_prose_from_line_in_docstring() {
+    // Used to be rejected as "expected 'import' keyword after module path".
+    let source = r#""""Doc.
+
+from the CLI, nothing else calls this.
+"""
+"#;
+    assert_sorts_to(source, source);
+}
+
+#[test]
+fn string_import_line_with_backslash_in_docstring() {
+    // Used to be rejected as "Backslash continuation in import statement".
+    let source = r#""""Doc.
+
+import this \
+"""
+"#;
+    assert_sorts_to(source, source);
+}
+
+#[test]
+fn string_import_lines_in_docstring_not_reordered() {
+    // The docstring's lines used to be swapped. The real imports after it must
+    // still be sorted.
+    assert_sorts_to(
+        r#""""Doc.
+
+import zzz_long_name
+import a
+"""
+
+import csv
+import os
+"#,
+        r#""""Doc.
+
+import zzz_long_name
+import a
+"""
+
+import os
+import csv
+"#,
+    );
+}
+
+#[test]
+fn string_from_lines_in_docstring_not_reordered() {
+    let source = r#""""Doc.
+
+from zzz_long_name import x
+from a import y
+"""
+"#;
+    assert_sorts_to(source, source);
+}
+
+#[test]
+fn string_single_quoted_triple_string_not_reordered() {
+    let source = "X = '''\nimport zzz_long_name\nimport a\n'''\n";
+    assert_sorts_to(source, source);
+}
+
+#[test]
+fn string_prefixed_triple_string_not_reordered() {
+    let source = "X = r\"\"\"\nimport zzz_long_name\nimport a\n\"\"\"\n";
+    assert_sorts_to(source, source);
+}
+
+#[test]
+fn string_other_quote_kind_does_not_close_the_string() {
+    // ''' inside a """ string is text, so the string is still open below it.
+    let source = r#""""Says ''' here.
+import zzz_long_name
+import a
+"""
+"#;
+    assert_sorts_to(source, source);
+}
+
+#[test]
+fn string_escaped_triple_quote_does_not_close_the_string() {
+    // An escaped \""" is text, not the closing delimiter.
+    let source = r#""""Has \""" inside.
+import zzz_long_name
+import a
+"""
+"#;
+    assert_sorts_to(source, source);
+}
+
+#[test]
+fn string_escaped_triple_quote_in_raw_string_does_not_close_the_string() {
+    // Python also treats \""" as escaped in a raw string; it just keeps the `\`.
+    let source = "X = r\"\"\"a\\\"\"\"\nimport zzz_long_name\nimport a\n\"\"\"\n";
+    assert_sorts_to(source, source);
+}
+
+// Guards: real imports after a closed string, or after a quote that opens no
+// string, must still be sorted.
+
+#[test]
+fn string_one_line_triple_string_does_not_open_a_string() {
+    // Opens and closes on one line, so the imports below are real.
+    assert_sorts_to(
+        "X = \"\"\"a\"\"\"\nimport zzz_long_name\nimport a\n",
+        "X = \"\"\"a\"\"\"\nimport a\nimport zzz_long_name\n",
+    );
+}
+
+#[test]
+fn string_one_line_docstring_then_imports() {
+    assert_sorts_to(
+        "\"\"\"Doc.\"\"\"\n\nimport zzz_long_name\nimport a\n",
+        "\"\"\"Doc.\"\"\"\n\nimport a\nimport zzz_long_name\n",
+    );
+}
+
+#[test]
+fn string_triple_quote_in_comment_does_not_open_a_string() {
+    assert_sorts_to(
+        "# a \"\"\" in a comment\nimport zzz_long_name\nimport a\n",
+        "# a \"\"\" in a comment\nimport a\nimport zzz_long_name\n",
+    );
+}
+
+#[test]
+fn string_triple_quote_in_single_quoted_string_does_not_open_a_string() {
+    assert_sorts_to(
+        "X = '\"\"\"'\nimport zzz_long_name\nimport a\n",
+        "X = '\"\"\"'\nimport a\nimport zzz_long_name\n",
+    );
+}
